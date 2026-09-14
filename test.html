@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Three.js Test</title>
+<style>
+body { margin: 0; overflow: hidden; background: #1a1a2e; }
+canvas { display: block; }
+</style>
+</head>
+<body>
+<script type="importmap">
+{
+    "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/"
+    }
+}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x1a1a2e);
+
+const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 100);
+camera.position.set(3, 2, 5);
+camera.lookAt(0, 0, 0);
+
+// Lights
+scene.add(new THREE.AmbientLight(0xffffff, 1));
+const light = new THREE.DirectionalLight(0xffffff, 2);
+light.position.set(5, 10, 5);
+scene.add(light);
+
+// Grid
+scene.add(new THREE.GridHelper(10, 20, 0x444466, 0x222244));
+
+// Cube
+const cube = new THREE.Mesh(
+    new THREE.BoxGeometry(1, 1, 1),
+    new THREE.MeshStandardMaterial({ color: 0xff6600 })
+);
+scene.add(cube);
+
+// Axis helper
+scene.add(new THREE.AxesHelper(2));
+
+// OrbitControls
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+
+// Render loop
+function animate() {
+    requestAnimationFrame(animate);
+    controls.update();
+    cube.rotation.y += 0.01;
+    renderer.render(scene, camera);
+}
+animate();
+
+document.body.insertAdjacentHTML('afterbegin', '<div style="position:fixed;top:10px;left:10px;color:#0f0;background:#000;padding:4px 8px;z-index:100;font:12px monospace;">Three.js Test — should see orange cube on grid</div>');
+console.log('Three.js test loaded — scene initialized with', renderer, scene, camera);
+</script>
+</body>
+</html>

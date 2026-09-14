@@ -1,0 +1,893 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BVH 动画剪辑工具</title>
+<script type="importmap">
+{
+    "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/"
+    }
+}
+</script>
+<style>
+:root {
+    --bg: #1a1a2e; --bg2: #16213e; --bg3: #0f3460;
+    --surface: #1e2a3a; --toolbar: #1a1f2e; --border: #2a3a4a;
+    --text: #e0e0e0; --text2: #a0a0a0; --text3: #606070;
+    --accent: #4fc3f7; --accent-hover: #29b6f6; --accent-dim: #1a3a4a;
+    --red: #ff5252; --green: #4caf50; --orange: #ffa726;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+html,body { width:100%; height:100%; overflow:hidden; font:13px -apple-system,sans-serif; color:var(--text); background:var(--bg); user-select:none; display:flex; flex-direction:column; }
+
+/* Toolbar */
+#toolbar { display:flex; align-items:center; justify-content:space-between; height:36px; padding:0 12px; background:var(--toolbar); border-bottom:1px solid var(--border); flex-shrink:0; gap:8px; }
+.tb-l,.tb-r { display:flex; align-items:center; gap:6px; }
+.app-title { font-weight:700; font-size:14px; color:var(--accent); margin-right:8px; }
+button { padding:4px 10px; border:1px solid var(--border); border-radius:4px; background:var(--surface); color:var(--text); cursor:pointer; font-size:12px; font-family:inherit; white-space:nowrap; transition:all .15s; }
+button:hover:not(:disabled) { background:var(--bg3); border-color:var(--accent); }
+button:disabled { opacity:0.4; cursor:not-allowed; }
+button.primary { background:var(--accent-dim); border-color:var(--accent); color:var(--accent); }
+button.primary:hover:not(:disabled) { background:var(--accent); color:#000; }
+.sep { width:1px; height:20px; background:var(--border); margin:0 4px; }
+.tool-info { font:11px monospace; color:var(--text2); padding:2px 6px; background:var(--bg); border-radius:4px; }
+label { font-size:12px; color:var(--text2); display:flex; align-items:center; gap:4px; cursor:pointer; }
+select { padding:3px 6px; border:1px solid var(--border); border-radius:4px; background:var(--surface); color:var(--text); font-size:12px; }
+
+/* Main */
+#main { flex:1; position:relative; overflow:hidden; }
+#viewport { position:absolute; inset:0 240px 0 0; background:#1a2540; }
+#viewport canvas { display:block; width:100%; height:100%; }
+#view-badge { position:absolute; top:8px; left:10px; z-index:5; padding:3px 8px; border-radius:4px;
+  font:11px monospace; background:rgba(15,52,96,.8); color:var(--accent); border:1px solid var(--border); pointer-events:none; }
+#view-badge.ok { color:#8ef0a8; border-color:#2e6b3f; }
+#view-badge.bad { background:rgba(120,20,20,.9); color:#ffb4b4; border-color:var(--red); font-weight:700; }
+#sidebar { position:absolute; top:0; right:0; bottom:0; width:240px; background:var(--bg2); border-left:1px solid var(--border); display:flex; flex-direction:column; overflow-y:auto; }
+.sec-hdr { padding:8px 12px; font-size:12px; font-weight:600; color:var(--text2); background:var(--toolbar); text-transform:uppercase; letter-spacing:.5px; position:sticky; top:0; z-index:1; }
+#joint-tree { padding:6px 0; max-height:300px; overflow-y:auto; }
+.joint-node { padding:3px 12px; cursor:pointer; font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.joint-node:hover { background:var(--bg3); }
+.joint-node .indent { display:inline-block; margin-right:2px; }
+#motion-info { padding:8px 12px; font-size:11px; color:var(--text2); line-height:1.6; }
+.info-row { display:flex; justify-content:space-between; }
+.info-label { color:var(--text3); }
+.info-value { font:monospace; color:var(--text); }
+
+/* Overlays */
+#drop-overlay { position:absolute; inset:0; background:rgba(13,27,42,.92); display:flex; align-items:center; justify-content:center; z-index:10; border:3px dashed var(--accent); margin:10px; border-radius:12px; }
+#drop-overlay.hidden { display:none; }
+.drop-hint { text-align:center; color:var(--accent); }
+.drop-hint .icon { font-size:64px; display:block; margin-bottom:12px; }
+.drop-hint p { font-size:18px; color:var(--text2); }
+#loading { position:absolute; inset:0; background:rgba(13,27,42,.8); display:flex; flex-direction:column; align-items:center; justify-content:center; z-index:20; }
+#loading.hidden { display:none; }
+.spinner { width:40px; height:40px; border:3px solid var(--border); border-top-color:var(--accent); border-radius:50%; animation:spin .8s linear infinite; margin-bottom:12px; }
+@keyframes spin { to { transform:rotate(360deg); } }
+
+/* Bottom */
+#bottom { display:flex; flex-direction:column; flex-shrink:0; border-top:1px solid var(--border); background:var(--toolbar); }
+#tl-wrap { height:140px; background:#1a1f2e; position:relative; }
+#tl-canvas { width:100%; height:100%; display:block; }
+#playbar { display:flex; align-items:center; height:36px; padding:0 12px; gap:4px; border-top:1px solid var(--border); }
+.play-btn { width:32px; height:26px; border:1px solid transparent; border-radius:4px; background:transparent; color:var(--text); cursor:pointer; font-size:14px; display:flex; align-items:center; justify-content:center; }
+.play-btn:hover:not(:disabled) { background:var(--surface); border-color:var(--border); }
+.play-btn:disabled { opacity:.3; cursor:not-allowed; }
+.play-btn.play-main { width:36px; height:28px; background:var(--accent-dim); border-color:var(--accent); font-size:16px; }
+.play-btn.active { background:var(--accent-dim); border-color:var(--accent); color:var(--accent); }
+.play-info { flex:1; padding:0 12px; font-size:12px; color:var(--text2); }
+.trim-btn { width:auto; padding:0 8px; font-size:11px; }
+#trim-text { font:11px monospace; color:var(--accent); min-width:100px; }
+
+/* Toast */
+#toast { position:fixed; bottom:60px; left:50%; transform:translateX(-50%); padding:8px 20px; border-radius:20px; background:var(--bg3); color:var(--text); font-size:13px; z-index:1000; opacity:0; transition:opacity .3s; pointer-events:none; box-shadow:0 4px 12px rgba(0,0,0,.5); }
+#toast.show { opacity:1; }
+::-webkit-scrollbar { width:6px; }
+::-webkit-scrollbar-thumb { background:var(--border); border-radius:3px; }
+</style>
+</head>
+<body>
+
+<div id="toolbar">
+  <div class="tb-l">
+    <span class="app-title">🎬 BVH Clip</span>
+    <button id="btn-import" class="primary">📂 导入</button>
+    <button id="btn-export" disabled>💾 导出裁剪</button>
+    <button id="btn-export-full" disabled>📤 导出全部</button>
+    <span class="sep"></span>
+    <button id="btn-reset-cam" disabled>📷 重置视角</button>
+    <label><input type="checkbox" id="chk-ground" checked>地面</label>
+    <label><input type="checkbox" id="chk-trail" checked>轨迹</label>
+  </div>
+  <div class="tb-r">
+    速度:
+    <select id="sel-speed">
+      <option value="0.25">0.25x</option><option value="0.5">0.5x</option>
+      <option value="1" selected>1x</option><option value="2">2x</option><option value="4">4x</option>
+    </select>
+    <span class="sep"></span>
+    <span class="tool-info" id="info-frame">帧: -/-</span>
+    <span class="tool-info" id="info-time">时间: -</span>
+    <span class="tool-info" id="info-dur">总长: -</span>
+  </div>
+</div>
+
+<div id="main">
+  <div id="viewport">
+    <div id="view-badge">v2.1 修复版</div>
+    <div id="drop-overlay"><div class="drop-hint"><span class="icon">📂</span><p>拖放 BVH 文件到此处</p></div></div>
+    <div id="loading" class="hidden"><div class="spinner"></div><p>加载中...</p></div>
+  </div>
+  <div id="sidebar">
+    <div class="sec-hdr">🦴 骨骼层级</div>
+    <div id="joint-tree"><div style="padding:16px 12px;text-align:center;color:var(--text3);font-size:12px;">请先导入 BVH 文件</div></div>
+    <div class="sec-hdr">📊 动作信息</div>
+    <div id="motion-info"><div style="padding:8px 12px;color:var(--text3);font-size:12px;">-</div></div>
+  </div>
+</div>
+
+<div id="bottom">
+  <div id="tl-wrap"><canvas id="tl-canvas"></canvas></div>
+  <div id="playbar">
+    <button class="play-btn" id="btn-start" disabled title="跳到开头">⏮</button>
+    <button class="play-btn" id="btn-prev" disabled title="上一帧">◀</button>
+    <button class="play-btn play-main" id="btn-play" disabled title="播放/暂停 (Space)">▶</button>
+    <button class="play-btn" id="btn-next" disabled title="下一帧">▶</button>
+    <button class="play-btn" id="btn-end" disabled title="跳到末尾">⏭</button>
+    <button class="play-btn" id="btn-loop" title="循环播放">🔁</button>
+    <span class="play-info" id="status-text">等待导入 BVH 文件...</span>
+    <button class="play-btn trim-btn" id="btn-in" disabled title="设置入点 (I)">⏩ 入点</button>
+    <button class="play-btn trim-btn" id="btn-out" disabled title="设置出点 (O)">⏪ 出点</button>
+    <button class="play-btn trim-btn" id="btn-clear-trim" disabled title="清除裁剪">✕ 清除</button>
+    <span id="trim-text"></span>
+  </div>
+</div>
+
+<input type="file" id="file-input" accept=".bvh" style="display:none">
+
+<script type="module">
+// ==================== BVH Parser ====================
+function parseBVH(text) {
+  const lines = text.replace(/\r/g,'').split('\n').map(l=>l.trim()).filter(l=>l&&!l.startsWith('#'));
+  let pos = 0;
+  if (lines[pos] !== 'HIERARCHY') throw new Error('Missing HIERARCHY');
+  pos++;
+  const root = parseJoint(lines, pos);
+  pos = root.nextPos;
+  if (lines[pos] !== 'MOTION') throw new Error('Missing MOTION');
+  pos++;
+  const frames = parseInt(lines[pos].match(/Frames:\s*(\d+)/i)[1]); pos++;
+  const frameTime = parseFloat(lines[pos].match(/Frame Time:\s*([\d.]+)/i)[1]); pos++;
+  const data = [];
+  for (let i=0; i<frames; i++) { data.push(lines[pos].split(/\s+/).map(parseFloat)); pos++; }
+
+  const jn=[], jp=[], jo=[], jc=[], je=[];
+  flatten(root.node, -1, jn, jp, jo, jc, je);
+  const cm=[]; let ci=0;
+  for (let i=0;i<jn.length;i++) { cm.push({start:ci, names:jc[i], count:jc[i].length}); ci+=jc[i].length; }
+  return { hierarchy:root.node, motion:{frames,frameTime,data}, jointNames:jn, jointParents:jp, jointOffsets:jo, jointChannels:jc, jointIsEndSite:je, channelMap:cm, totalChannels:ci, duration:frames*frameTime };
+}
+
+function parseJoint(lines, pos) {
+  const line = lines[pos];
+  const isEnd = (line==='End Site'||line==='End') && lines[pos+1]==='{';
+  if (isEnd) {
+    pos+=2;
+    const off = parseOffset(lines[pos]); pos++;
+    if (lines[pos]==='}') pos++;
+    return { node:{name:'EndSite',offset:off,channels:[],children:[],isEndSite:true}, nextPos:pos };
+  }
+  const name = line.split(/\s+/)[1]; pos++;
+  if (lines[pos]==='{') pos++;
+  const offset = parseOffset(lines[pos]); pos++;
+  let channels = [];
+  if (lines[pos] && lines[pos].startsWith('CHANNELS')) {
+    const parts = lines[pos].split(/\s+/);
+    channels = parts.slice(2, 2+parseInt(parts[1]));
+    pos++;
+  }
+  const children = [];
+  while (pos<lines.length && lines[pos]!=='}') {
+    const c = parseJoint(lines, pos);
+    children.push(c.node); pos = c.nextPos;
+  }
+  if (pos<lines.length && lines[pos]==='}') pos++;
+  return { node:{name,offset,channels,children,isEndSite:false,isRoot:line.startsWith('ROOT')}, nextPos:pos };
+}
+function parseOffset(line) {
+  const p=line.trim().split(/\s+/);
+  if (p[0]==='OFFSET'&&p.length>=4) return {x:parseFloat(p[1]),y:parseFloat(p[2]),z:parseFloat(p[3])};
+  throw new Error('Bad OFFSET: '+line);
+}
+function flatten(node,pid,names,parents,offsets,channels,isEnd) {
+  const idx=names.length;
+  names.push(node.name); parents.push(pid);
+  offsets.push([node.offset.x,node.offset.y,node.offset.z]);
+  channels.push(node.channels||[]); isEnd.push(node.isEndSite||false);
+  for (const c of node.children) flatten(c,idx,names,parents,offsets,channels,isEnd);
+}
+
+/* ---- Forward kinematics -------------------------------------------------
+ * Matrices are plain row-major 4x4 arrays: element (row r, col c) lives at
+ * index r*4+c, and the translation sits in the LAST COLUMN (indices 3/7/11).
+ * Points are column vectors, so a chain composes as world = parent * local
+ * and a joint's world position is [m[3], m[7], m[11]].
+ *
+ * (The previous version stored the translation in indices 12/13/14 — the
+ *  row-vector convention — while multiplying as row-major/column-vector, so
+ *  every parent transform dropped its translation and joints landed anywhere.)
+ */
+
+const DEG2RAD = Math.PI / 180;
+
+function mat4IdentityInto(out) {
+  out[0]=1;out[1]=0;out[2]=0;out[3]=0;
+  out[4]=0;out[5]=1;out[6]=0;out[7]=0;
+  out[8]=0;out[9]=0;out[10]=1;out[11]=0;
+  out[12]=0;out[13]=0;out[14]=0;out[15]=1;
+}
+
+function mat4RotateXInto(out,a){const c=Math.cos(a),s=Math.sin(a);
+  out[0]=1;out[1]=0;out[2]=0;out[3]=0;
+  out[4]=0;out[5]=c;out[6]=-s;out[7]=0;
+  out[8]=0;out[9]=s;out[10]=c;out[11]=0;
+  out[12]=0;out[13]=0;out[14]=0;out[15]=1;}
+
+function mat4RotateYInto(out,a){const c=Math.cos(a),s=Math.sin(a);
+  out[0]=c;out[1]=0;out[2]=s;out[3]=0;
+  out[4]=0;out[5]=1;out[6]=0;out[7]=0;
+  out[8]=-s;out[9]=0;out[10]=c;out[11]=0;
+  out[12]=0;out[13]=0;out[14]=0;out[15]=1;}
+
+function mat4RotateZInto(out,a){const c=Math.cos(a),s=Math.sin(a);
+  out[0]=c;out[1]=-s;out[2]=0;out[3]=0;
+  out[4]=s;out[5]=c;out[6]=0;out[7]=0;
+  out[8]=0;out[9]=0;out[10]=1;out[11]=0;
+  out[12]=0;out[13]=0;out[14]=0;out[15]=1;}
+
+/** out = a * b (row-major). Safe when out === a, NOT when out === b. */
+function mat4MultiplyInto(out,a,b){
+  for(let i=0;i<4;i++){
+    const a0=a[i*4],a1=a[i*4+1],a2=a[i*4+2],a3=a[i*4+3];
+    out[i*4]  =a0*b[0] +a1*b[4] +a2*b[8] +a3*b[12];
+    out[i*4+1]=a0*b[1] +a1*b[5] +a2*b[9] +a3*b[13];
+    out[i*4+2]=a0*b[2] +a1*b[6] +a2*b[10]+a3*b[14];
+    out[i*4+3]=a0*b[3] +a1*b[7] +a2*b[11]+a3*b[15];
+  }
+}
+
+/** Pull one joint's channel values out of a frame. */
+function readJointChannels(fd, cm) {
+  const cn = cm.names, base = cm.start;
+  let tx=0,ty=0,tz=0,rx=0,ry=0,rz=0,hasPos=false;
+  for (let j=0;j<cn.length;j++) {
+    const v = fd[base+j], name = cn[j];
+    if (name==='Xposition') { tx=v; hasPos=true; }
+    else if (name==='Yposition') { ty=v; hasPos=true; }
+    else if (name==='Zposition') { tz=v; hasPos=true; }
+    else if (name==='Xrotation') rx=v*DEG2RAD;
+    else if (name==='Yrotation') ry=v*DEG2RAD;
+    else if (name==='Zrotation') rz=v*DEG2RAD;
+  }
+  return {tx,ty,tz,rx,ry,rz,hasPos};
+}
+
+/** out = rotation matrix, channels applied in the order they are listed
+ *  (Zrotation Yrotation Xrotation  ->  R = Rz * Ry * Rx, the BVH convention). */
+function mat4RotationInto(out, channelNames, rx, ry, rz) {
+  mat4IdentityInto(out);
+  const axisMat = new Array(16);
+  for (let k=0;k<channelNames.length;k++) {
+    const name = channelNames[k];
+    if (!name.endsWith('rotation')) continue;
+    const axis = name[0];
+    const angle = axis==='X' ? rx : (axis==='Y' ? ry : rz);
+    if (axis==='X') mat4RotateXInto(axisMat, angle);
+    else if (axis==='Y') mat4RotateYInto(axisMat, angle);
+    else mat4RotateZInto(axisMat, angle);
+    mat4MultiplyInto(out, out, axisMat);   // R = R * next
+  }
+  return out;
+}
+
+/** out = T(translation) * R(rotation) */
+function mat4LocalInto(out, channelNames, ch, translation) {
+  mat4RotationInto(out, channelNames, ch.rx, ch.ry, ch.rz);
+  out[3]=translation[0]; out[7]=translation[1]; out[11]=translation[2];
+  return out;
+}
+
+function computeJointPositions(bvh, fi) {
+  const {jointParents, jointOffsets, channelMap, motion} = bvh;
+  const fd = motion.data[fi], n = bvh.jointNames.length;
+  const wm = new Array(n);   // world matrices (row-major flat arrays)
+  const wp = new Array(n);
+  const local = new Array(16), tmp = new Array(16);
+
+  for (let i=0;i<n;i++) {
+    const cm = channelMap[i];
+    const ch = readJointChannels(fd, cm);
+    // Position channels (root) come from the motion data; every other joint
+    // is offset from its parent by the rest-pose OFFSET vector.
+    const t = ch.hasPos ? [ch.tx, ch.ty, ch.tz] : jointOffsets[i];
+    mat4LocalInto(local, cm.names, ch, t);
+
+    const parent = jointParents[i];
+    if (parent >= 0) {
+      mat4MultiplyInto(tmp, wm[parent], local);
+      wm[i] = tmp.slice();
+    } else {
+      wm[i] = local.slice();
+    }
+    wp[i] = [wm[i][3], wm[i][7], wm[i][11]];
+  }
+  return wp;
+}
+
+function computeMotionIntensity(bvh) {
+  const n=bvh.motion.frames, stride=Math.max(1,Math.floor(n/1500));
+  const intensity=new Float32Array(n); if(n===0)return intensity;
+  let prev=null;
+  for(let f=0;f<n;f+=stride) {
+    const rp=computeSingleJointPos(bvh,f,0);
+    if(f===0){ for(let k=0;k<stride&&k<n;k++)intensity[k]=0; }
+    else{
+      const d=Math.sqrt((rp[0]-prev[0])**2+(rp[1]-prev[1])**2+(rp[2]-prev[2])**2);
+      for(let k=f;k<f+stride&&k<n;k++)intensity[k]=d;
+    }
+    prev=rp;
+  }
+  return intensity;
+}
+
+/** World position of a single joint (only its ancestor chain is evaluated). */
+function computeSingleJointPos(bvh, fi, ji) {
+  const {jointParents,jointOffsets,channelMap,motion}=bvh;
+  const fd=motion.data[fi], chain=[];
+  let idx=ji; while(idx>=0){chain.unshift(idx);idx=jointParents[idx];}
+  const wm={};
+  const local=new Array(16), tmp=new Array(16);
+  for(const i of chain){
+    const cm=channelMap[i], ch=readJointChannels(fd, cm);
+    const t = ch.hasPos ? [ch.tx, ch.ty, ch.tz] : jointOffsets[i];
+    mat4LocalInto(local, cm.names, ch, t);
+    const pid=jointParents[i];
+    if(pid>=0&&wm[pid]){ mat4MultiplyInto(tmp, wm[pid], local); wm[i]=tmp.slice(); }
+    else wm[i]=local.slice();
+  }
+  const m=wm[ji];
+  return [m[3], m[7], m[11]];
+}
+
+function exportBVH(bvh, sf, ef) {
+  sf=Math.max(0,sf||0); ef=ef!==undefined?Math.min(bvh.motion.frames-1,ef):bvh.motion.frames-1;
+  const lines=[]; lines.push('HIERARCHY'); exportJoint(bvh.hierarchy,0,lines);
+  lines.push('MOTION'); lines.push(`Frames: ${ef-sf+1}`); lines.push(`Frame Time: ${bvh.motion.frameTime}`);
+  for(let f=sf;f<=ef;f++) lines.push(bvh.motion.data[f].map(v=>{const s=v.toFixed(6);return s.replace(/\.?0+$/,'')||'0';}).join(' '));
+  return lines.join('\n');
+}
+function exportJoint(node,indent,lines){
+  const p='  '.repeat(indent);
+  if(node.isEndSite){lines.push(p+'End Site');lines.push(p+'{');lines.push(p+'  OFFSET '+fmt(node.offset.x)+' '+fmt(node.offset.y)+' '+fmt(node.offset.z));lines.push(p+'}');return;}
+  lines.push(p+(node.isRoot?'ROOT':'JOINT')+' '+node.name);lines.push(p+'{');
+  lines.push(p+'  OFFSET '+fmt(node.offset.x)+' '+fmt(node.offset.y)+' '+fmt(node.offset.z));
+  if(node.channels.length>0) lines.push(p+'  CHANNELS '+node.channels.length+' '+node.channels.join(' '));
+  for(const c of node.children) exportJoint(c,indent+1,lines);
+  lines.push(p+'}');
+}
+function fmt(n){const s=n.toFixed(6);return s.replace(/\.?0+$/,'')||'0';}
+
+// ==================== Three.js imports ====================
+// Importmap in <head> handles all bare-specifier resolution.
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const UP_Y = new THREE.Vector3(0, 1, 0);
+const APP_VERSION = 'v2.1';   // 修复了前向运动学；显示在视口左上角用来确认页面不是旧缓存
+
+// ==================== Skeleton Viewer ====================
+class SkeletonViewer {
+  constructor(container) {
+    this.container = container;
+    this.bvh = null; this.currentFrame = 0; this.isPlaying = false;
+    this.playSpeed = 1; this.loop = false; this._acc = 0;
+    this.showGround = true; this.showTrail = true; this.onFrameChange = null;
+    this.skelScale = 1; this.groundY = 0; this.bounds = null;
+    this.renderer = new THREE.WebGLRenderer({ antialias: true });
+    this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    // Don't set size yet — let CSS 100% handle display, then _resize() sets drawing buffer
+    this.container.appendChild(this.renderer.domElement);
+    this.scene = new THREE.Scene();
+    this.camera = new THREE.PerspectiveCamera(50, 1.6, 0.1, 200);
+    this.camera.position.set(2, 1.5, 4);
+    this.camera.lookAt(0, 0.9, 0);
+    this.scene.add(new THREE.AmbientLight(0x606080, 4));
+    const kl = new THREE.DirectionalLight(0xffffff, 3); kl.position.set(5,8,5); this.scene.add(kl);
+    this.scene.add(new THREE.AxesHelper(0.5));
+    this.groundGroup = new THREE.Group(); this.scene.add(this.groundGroup);
+    this.ground = null; this._setGroundSize(6, 0, 0);
+    this.boneGroup = new THREE.Group(); this.scene.add(this.boneGroup);
+    this.boneLines=[]; this.jointSpheres=[];
+    // Root trajectory (轨迹)
+    this.trailGroup = new THREE.Group(); this.trailGroup.visible = false; this.scene.add(this.trailGroup);
+    this.trailFull=null; this.trailDone=null; this.trailDot=null; this.trailCount=0; this.trailStride=1;
+    this.controls = new OrbitControls(this.camera, this.renderer.domElement);
+    this.controls.target.set(0,0.9,0); this.controls.enableDamping=true; this.controls.dampingFactor=0.1;
+    this.controls.minDistance=0.3; this.controls.maxDistance=30; this.controls.update();
+    // Use rAF to ensure layout is done before first resize
+    requestAnimationFrame(() => { this._resize(); console.log('SkeletonViewer first resize', {w:this.container.clientWidth, h:this.container.clientHeight}); });
+    console.log('SkeletonViewer ready', {canvas:this.renderer.domElement});
+  }
+
+  /* ---- ground ---- */
+  _setGroundSize(size, cx, cz) {
+    if (this.ground) {
+      this.groundGroup.remove(this.ground);
+      this.ground.geometry.dispose(); this.ground.material.dispose();
+    }
+    const divisions = Math.max(4, Math.min(400, Math.round(size/0.5)));
+    this.ground = new THREE.GridHelper(size, divisions, 0x4a6070, 0x2a3a4a);
+    this.ground.position.set(cx, 0, cz);
+    this.ground.visible = this.showGround;
+    this.groundGroup.add(this.ground);
+  }
+
+  _resize() {
+    const w=this.container.clientWidth, h=this.container.clientHeight;
+    console.log('SkeletonViewer._resize', {w, h});
+    if(w===0||h===0) {
+      // Layout not ready yet — retry next frame
+      requestAnimationFrame(() => this._resize());
+      return;
+    }
+    this.renderer.setSize(w, h, false); // false: don't set CSS, use our CSS 100%
+    this.camera.aspect=w/h; this.camera.updateProjectionMatrix();
+  }
+
+  loadBVH(bvh) {
+    this.bvh=bvh; this.currentFrame=0;
+    this._clearBones();
+    this._buildSkeleton();
+    this._measureCharacter();
+    this._buildTrail();
+    this.trailGroup.visible = this.showTrail;
+    this._fitView();
+    this._update(0);
+    this.lastSelfCheck = this._selfCheck();
+    this._setBadge(this.lastSelfCheck);
+  }
+
+  /** 骨骼自检：零偏移关节必须与父关节重合，且躯干大致直立。
+   *  用来识别“旧版页面 / 浏览器缓存页面”造成的骨骼错乱。 */
+  _selfCheck() {
+    const {jointParents, jointOffsets} = this.bvh;
+    const pos = computeJointPositions(this.bvh, 0);
+    let endErr = 0;
+    for (let i=0;i<pos.length;i++){
+      const p=jointParents[i]; if(p<0) continue;
+      const o=jointOffsets[i];
+      if(Math.sqrt(o[0]*o[0]+o[1]*o[1]+o[2]*o[2])>1e-9) continue; // 静置于父关节的关节
+      const d=Math.sqrt((pos[i][0]-pos[p][0])**2+(pos[i][1]-pos[p][1])**2+(pos[i][2]-pos[p][2])**2);
+      if(d>endErr) endErr=d;
+    }
+    let minY=Infinity, maxY=-Infinity;
+    for(const q of pos){ if(q[1]<minY)minY=q[1]; if(q[1]>maxY)maxY=q[1]; }
+    const h=maxY-minY, hipY=pos[0][1];
+    const upright = h>0 && (maxY-hipY)>0.15*h && (hipY-minY)>0.2*h;
+    return { ok: upright && endErr*this.skelScale < 1e-3, height: h*this.skelScale, endErr: endErr*this.skelScale };
+  }
+  _setBadge(chk) {
+    if (typeof document === 'undefined') return;
+    const el = document.getElementById('view-badge');
+    if (!el) return;
+    if (chk.ok) { el.textContent = '✔ ' + APP_VERSION + ' 修复版 · 骨骼自检通过'; el.className = 'ok'; }
+    else { el.textContent = '⚠ 骨骼错乱 — 请按 Ctrl+Shift+R 强制刷新页面'; el.className = 'bad'; }
+  }
+  _clearBones() {
+    for(const o of [...this.boneGroup.children]){if(o.geometry)o.geometry.dispose();if(o.material)o.material.dispose();}
+    this.boneGroup.clear(); this.boneLines=[]; this.jointSpheres=[];
+  }
+  _buildSkeleton() {
+    const bvh=this.bvh;
+    const {jointParents,jointOffsets,jointIsEndSite,jointNames}=bvh, n=jointNames.length;
+    const bm=new THREE.MeshStandardMaterial({color:0x4fc3f7,roughness:.5,metalness:.1});
+    const rm=new THREE.MeshStandardMaterial({color:0xffa726,roughness:.4,metalness:.2,emissive:0x331100,emissiveIntensity:.4});
+    const em=new THREE.MeshStandardMaterial({color:0x66bb6a,roughness:.6,metalness:0});
+    for(let i=0;i<n;i++){
+      const isR=jointParents[i]<0, isE=jointIsEndSite[i];
+      const rad=isR?.04:isE?.012:.022, mat=isR?rm:isE?em:bm;
+      const s=new THREE.Mesh(new THREE.SphereGeometry(rad,16,12),mat.clone());
+      s.userData={ji:i,name:jointNames[i]}; this.boneGroup.add(s); this.jointSpheres.push(s);
+      if(!isR&&!isE){
+        const off=jointOffsets[i], len=Math.sqrt(off[0]**2+off[1]**2+off[2]**2)||.001;
+        const c=new THREE.Mesh(new THREE.CylinderGeometry(.01,.01,1,8,1),bm.clone());
+        c.userData={ji:i,blen:len}; this.boneGroup.add(c); this.boneLines.push(c);
+      }
+    }
+  }
+
+  /** Character height (normalised to 2 world units) + lowest point of the motion. */
+  _measureCharacter() {
+    const frames=this.bvh.motion.frames, step=Math.max(1,Math.floor(frames/60));
+    let minY=Infinity, maxY=-Infinity;
+    for(let f=0;f<frames;f+=step){
+      const pos=computeJointPositions(this.bvh,f);
+      for(let i=0;i<pos.length;i++){const y=pos[i][1];if(y<minY)minY=y;if(y>maxY)maxY=y;}
+    }
+    if(!isFinite(minY)){minY=0;maxY=1;}
+    this.skelScale = (maxY-minY)>0 ? 2/(maxY-minY) : 1;
+    this.groundY = minY;   // drop the rig so its lowest point rests on the grid
+  }
+
+  /* ---- root trajectory ---- */
+  _buildTrail() {
+    this._clearTrail();
+    if(!this.bvh) return;
+    const total=this.bvh.motion.frames, s=this.skelScale, gy=this.groundY;
+    if(!total) return;
+    const stride=Math.max(1,Math.ceil(total/4000));
+    const pts=[]; let minX=Infinity,maxX=-Infinity,minZ=Infinity,maxZ=-Infinity;
+    const push=(f)=>{
+      const p=computeSingleJointPos(this.bvh,f,0);
+      const x=p[0]*s, y=(p[1]-gy)*s, z=p[2]*s;
+      pts.push(x,y,z);
+      if(x<minX)minX=x; if(x>maxX)maxX=x; if(z<minZ)minZ=z; if(z>maxZ)maxZ=z;
+    };
+    for(let f=0;f<total;f+=stride) push(f);
+    if((total-1)%stride!==0) push(total-1);
+    if(!pts.length) return;
+
+    const arr=new Float32Array(pts);
+    const geomFull=new THREE.BufferGeometry();
+    geomFull.setAttribute('position', new THREE.Float32BufferAttribute(arr,3));
+    const geomDone=new THREE.BufferGeometry();
+    geomDone.setAttribute('position', new THREE.Float32BufferAttribute(arr.slice(),3));
+    geomDone.setDrawRange(0,1);
+
+    this.trailFull=new THREE.Line(geomFull, new THREE.LineBasicMaterial({color:0x4fc3f7,transparent:true,opacity:.3,depthWrite:false}));
+    this.trailDone=new THREE.Line(geomDone, new THREE.LineBasicMaterial({color:0xffa726,transparent:true,opacity:.95,depthWrite:false}));
+    this.trailDot=new THREE.Mesh(new THREE.SphereGeometry(.035,14,10), new THREE.MeshBasicMaterial({color:0xffa726}));
+    this.trailGroup.add(this.trailFull, this.trailDone, this.trailDot);
+    this.trailStride=stride; this.trailCount=pts.length/3;
+    this.bounds={minX,maxX,minZ,maxZ};
+  }
+  _clearTrail() {
+    for(const o of [...this.trailGroup.children]){
+      if(o.geometry)o.geometry.dispose();
+      if(o.material)o.material.dispose();
+    }
+    this.trailGroup.clear();
+    this.trailFull=this.trailDone=this.trailDot=null;
+    this.trailCount=0; this.bounds=null;
+  }
+  _updateTrail(fi) {
+    if(!this.trailDone) return;
+    const i=Math.max(0,Math.min(this.trailCount-1, Math.floor(fi/this.trailStride)));
+    this.trailDone.geometry.setDrawRange(0,i+1);
+    const a=this.trailDone.geometry.attributes.position;
+    this.trailDot.position.set(a.getX(i),a.getY(i),a.getZ(i));
+  }
+
+  /** Frame the whole take so the character never walks out of view. */
+  _fitView() {
+    const b=this.bounds;
+    if(!b||!isFinite(b.minX)){ this.resetCamera(); return; }
+    const cx=(b.minX+b.maxX)/2, cz=(b.minZ+b.maxZ)/2;
+    const spanX=Math.max(b.maxX-b.minX,.5), spanZ=Math.max(b.maxZ-b.minZ,.5), spanY=2;
+    this._setGroundSize(Math.max(4,spanX,spanZ)*1.6, cx, cz);
+    const fov=this.camera.fov*Math.PI/180, aspect=this.camera.aspect||1.6;
+    const distV=(Math.max(spanY,spanZ)*0.5)/Math.tan(fov/2);
+    const distH=(spanX*0.6)/(Math.tan(fov/2)*aspect);
+    const dist=Math.max(distV,distH)*1.35+1;
+    this.controls.target.set(cx, spanY*0.5, cz);
+    this.camera.position.copy(this.controls.target).addScaledVector(new THREE.Vector3(.5,.55,1).normalize(), dist);
+    this.controls.update();
+  }
+
+  _update(fi) {
+    if(!this.bvh)return; this.currentFrame=fi;
+    const pos=computeJointPositions(this.bvh,fi), {jointParents}=this.bvh, s=this.skelScale, gy=this.groundY;
+    const n=pos.length, sx=new Array(n), sy=new Array(n), sz=new Array(n);
+    for(let i=0;i<n;i++){sx[i]=pos[i][0]*s;sy[i]=(pos[i][1]-gy)*s;sz[i]=pos[i][2]*s;}
+    for(let i=0;i<this.jointSpheres.length;i++){this.jointSpheres[i].position.set(sx[i],sy[i],sz[i]);}
+    for(const c of this.boneLines){
+      const i=c.userData.ji, pid=jointParents[i];
+      const dx=sx[i]-sx[pid], dy=sy[i]-sy[pid], dz=sz[i]-sz[pid], len=Math.sqrt(dx*dx+dy*dy+dz*dz);
+      c.position.set((sx[i]+sx[pid])/2,(sy[i]+sy[pid])/2,(sz[i]+sz[pid])/2);
+      if(len>.0001){const d=new THREE.Vector3(dx,dy,dz).normalize();c.quaternion.setFromUnitVectors(UP_Y,d);}
+      c.scale.set(1,Math.max(len,.001),1);
+    }
+    this._updateTrail(fi);
+  }
+  resetCamera(){ if(this.bounds) this._fitView(); else { this.camera.position.set(2,1.5,4); this.controls.target.set(0,.9,0); this.controls.update(); } }
+  render(){this.controls.update();this.renderer.render(this.scene,this.camera);}
+  animate(dt){
+    if(!this.isPlaying||!this.bvh)return false;
+    const fps=1/this.bvh.motion.frameTime; this._acc+=fps*dt*this.playSpeed;
+    let ch=false;
+    while(this._acc>=1){this._acc-=1;this.currentFrame++;if(this.currentFrame>=this.bvh.motion.frames){this.currentFrame=this.loop?0:this.bvh.motion.frames-1;if(!this.loop)this.isPlaying=false;}ch=true;}
+    if(ch){this._update(this.currentFrame);if(this.onFrameChange)this.onFrameChange(this.currentFrame);}
+    return ch;
+  }
+  play(){this.isPlaying=true;this._acc=0;} pause(){this.isPlaying=false;}
+  seekTo(f){if(!this.bvh)return;this.currentFrame=Math.max(0,Math.min(f,this.bvh.motion.frames-1));this._acc=0;this._update(this.currentFrame);}
+  setShowGround(v){this.showGround=v;if(this.ground)this.ground.visible=v;}
+  setShowTrail(v){this.showTrail=v;this.trailGroup.visible=v&&!!this.trailDone;}
+  setSpeed(v){this.playSpeed=v;} setLoop(v){this.loop=v;}
+}
+
+// ==================== Timeline ====================
+class Timeline {
+  constructor(canvas) {
+    this.cv=canvas; this.ctx=canvas.getContext('2d');
+    this.total=0; this.ft=1/60; this.cf=0; this.ip=0; this.op=0;
+    this.ppf=1; this.so=0; this.intensity=null;
+    this.drag=null; this.onSeek=null; this.onTrim=null;
+    this._initEvents();
+  }
+  setData(total, ft, intensity) { this.total=total; this.ft=ft; this.intensity=intensity; this.op=total; this._fit(); this._draw(); }
+  setCurrentFrame(f) { this.cf=Math.max(0,Math.min(f,this.total-1)); this._draw(); }
+  setTrimRange(a,b) { this.ip=Math.max(0,a); this.op=Math.min(b,this.total); this._draw(); }
+  clearTrim() { this.ip=0; this.op=this.total; this._draw(); if(this.onTrim)this.onTrim(0,this.total); }
+  _fit() { const w=this.cv.width/(devicePixelRatio||1); if(this.total>0)this.ppf=Math.max(.5,w/this.total); this.so=0; }
+  resize() {
+    const p=this.cv.parentElement, w=p.clientWidth, h=p.clientHeight;
+    if(!w||!h)return;
+    const dpr=devicePixelRatio||1;
+    this.cv.width=w*dpr; this.cv.height=h*dpr; this.cv.style.width=w+'px'; this.cv.style.height=h+'px';
+    this.ctx.setTransform(dpr,0,0,dpr,0,0); this.dw=w; this.dh=h; this._draw();
+  }
+  _draw() {
+    const ctx=this.ctx, w=this.dw||this.cv.width, h=this.dh||this.cv.height;
+    if(!w||!h)return;
+    ctx.clearRect(0,0,w,h);
+    const rh=26, wh=h-rh;
+    ctx.fillStyle='#1a1f2e'; ctx.fillRect(0,0,w,h);
+    this._drawWave(ctx,0,rh,w,wh);
+    this._drawTrim(ctx,0,rh,w,wh);
+    this._drawRuler(ctx,0,0,w,rh);
+    this._drawPH(ctx,0,0,w,h);
+    this._drawHandles(ctx,0,rh,w,wh);
+  }
+  _drawRuler(ctx,x,y,w,h) {
+    ctx.fillStyle='#141820'; ctx.fillRect(x,y,w,h);
+    ctx.strokeStyle='#2a3a4a'; ctx.beginPath(); ctx.moveTo(x,y+h-.5); ctx.lineTo(x+w,y+h-.5); ctx.stroke();
+    if(!this.total)return;
+    const fps=Math.round(1/this.ft), pps=this.ppf*fps;
+    let ti=pps>200?.1:pps>80?.25:pps>40?.5:pps>15?1:pps>5?2:5;
+    const tpx=ti*pps, ss=Math.floor(this.so/pps/ti)*ti;
+    ctx.fillStyle='#a0a0a0'; ctx.font='10px monospace'; ctx.textAlign='center';
+    for(let sec=ss;;sec+=ti){
+      const tx=sec*pps-this.so; if(tx>w)break; if(tx<-50)continue;
+      const maj=Math.abs(sec%1)<.001||Math.abs(sec%1)>.999;
+      ctx.strokeStyle=maj?'#606070':'#3a3a4a'; ctx.lineWidth=maj?1:.5;
+      ctx.beginPath(); ctx.moveTo(tx,maj?y+8:y+16); ctx.lineTo(tx,y+h); ctx.stroke();
+      if(maj){const m=Math.floor(sec/60),s=String(Math.round(sec%60)).padStart(2,'0');ctx.fillText(m+':'+s,tx,y+20);}
+    }
+  }
+  _drawWave(ctx,x,y,w,h) {
+    if(!this.intensity||!this.total)return;
+    const my=y+h/2,mh=h*.45; let mx=0; for(let i=0;i<this.intensity.length;i++){if(this.intensity[i]>mx)mx=this.intensity[i];} if(!mx)mx=1;
+    ctx.fillStyle='rgba(79,195,247,.15)'; ctx.strokeStyle='rgba(79,195,247,.6)'; ctx.lineWidth=1;
+    ctx.beginPath();
+    const sf=Math.max(0,Math.floor(this.so/this.ppf)), ef=Math.min(this.total,Math.ceil((this.so+w)/this.ppf));
+    ctx.moveTo(0,my);
+    for(let f=sf;f<=ef;f++){const fx=f*this.ppf-this.so,v=this.intensity[f]/mx,fy=my-v*mh;ctx.lineTo(fx,fy);}
+    for(let f=ef;f>=sf;f--){const fx=f*this.ppf-this.so,v=this.intensity[f]/mx,fy=my+v*mh;ctx.lineTo(fx,fy);}
+    ctx.closePath(); ctx.fill(); ctx.stroke();
+  }
+  _drawTrim(ctx,x,y,w,h) {
+    if(this.ip<=0&&this.op>=this.total)return;
+    const ix=this.ip*this.ppf-this.so, ox=this.op*this.ppf-this.so;
+    ctx.fillStyle='rgba(0,0,0,.4)';
+    if(ix>0)ctx.fillRect(0,y,Math.min(ix,w),h);
+    if(ox<w)ctx.fillRect(Math.max(0,ox),y,w-Math.max(0,ox),h);
+    if(ix>=0||ox<=w)ctx.fillStyle='rgba(79,195,247,.05)',ctx.fillRect(Math.max(0,ix),y,Math.min(w,ox)-Math.max(0,ix),h);
+  }
+  _drawPH(ctx,x,y,w,h) {
+    const px=this.cf*this.ppf-this.so; if(px<-5||px>w+5)return;
+    ctx.strokeStyle='#ff5252'; ctx.lineWidth=2; ctx.beginPath(); ctx.moveTo(px,y); ctx.lineTo(px,y+h); ctx.stroke();
+    ctx.fillStyle='#ff5252'; ctx.beginPath(); ctx.moveTo(px-6,y); ctx.lineTo(px+6,y); ctx.lineTo(px,y+8); ctx.closePath(); ctx.fill();
+  }
+  _drawHandles(ctx,x,y,w,h) {
+    if(!this.total)return;
+    const ix=this.ip*this.ppf-this.so, ox=Math.min(this.op,this.total)*this.ppf-this.so;
+    if(this.ip>0){ctx.strokeStyle='#4caf50';ctx.lineWidth=2;ctx.setLineDash([4,3]);ctx.beginPath();ctx.moveTo(ix,y+6);ctx.lineTo(ix,y+h);ctx.stroke();ctx.setLineDash([]);ctx.fillStyle='#4caf50';ctx.font='10px sans-serif';ctx.textAlign='left';ctx.fillText('入:'+this.ip,ix+8,y+12);}
+    if(this.op<this.total){ctx.strokeStyle='#ff9800';ctx.lineWidth=2;ctx.setLineDash([4,3]);ctx.beginPath();ctx.moveTo(ox,y+6);ctx.lineTo(ox,y+h);ctx.stroke();ctx.setLineDash([]);ctx.fillStyle='#ff9800';ctx.font='10px sans-serif';ctx.textAlign='right';ctx.fillText('出:'+this.op,ox-8,y+12);}
+  }
+  _initEvents() {
+    this.cv.addEventListener('mousedown',e=>{
+      if(!this.total)return;
+      const pos=this._pos(e), rh=26;
+      if(e.button===1||(e.altKey&&e.button===0)){this.drag='pan';this._ps={x:pos.x,so:this.so};this.cv.style.cursor='grabbing';e.preventDefault();return;}
+      if(e.button!==0)return;
+      const phx=this.cf*this.ppf-this.so;
+      if(Math.abs(pos.x-phx)<6){this.drag='ph';return;}
+      if(this.ip>0&&pos.y>rh&&Math.abs(pos.x-(this.ip*this.ppf-this.so))<8){this.drag='ip';return;}
+      if(this.op<this.total&&pos.y>rh&&Math.abs(pos.x-(this.op*this.ppf-this.so))<8){this.drag='op';return;}
+      const f=this._frame(e); this.cf=f; if(this.onSeek)this.onSeek(f); this.drag='ph'; this._draw();
+    });
+    this.cv.addEventListener('mousemove',e=>{
+      const pos=this._pos(e);
+      if(this.drag==='ph'){const f=this._frame(e);this.cf=f;if(this.onSeek)this.onSeek(f);this._draw();return;}
+      if(this.drag==='ip'){let f=this._frame(e);f=Math.max(0,Math.min(f,this.op-1));this.ip=f;if(this.onTrim)this.onTrim(this.ip,this.op);this._draw();return;}
+      if(this.drag==='op'){let f=this._frame(e);f=Math.max(this.ip+1,Math.min(f,this.total));this.op=f;if(this.onTrim)this.onTrim(this.ip,this.op);this._draw();return;}
+      if(this.drag==='pan'){this.so=Math.max(0,this._ps.so+(this._ps.x-pos.x));this._draw();return;}
+    });
+    this.cv.addEventListener('mouseup',()=>{this.drag=null;this.cv.style.cursor='default';});
+    this.cv.addEventListener('mouseleave',()=>{this.drag=null;this.cv.style.cursor='default';});
+    this.cv.addEventListener('wheel',e=>{
+      if(!this.total)return; e.preventDefault();
+      const pos=this._pos(e);
+      if(e.ctrlKey||e.metaKey){const zf=e.deltaY<0?1.15:1/1.15,old=this.ppf,mf=(pos.x+this.so)/old;this.ppf=Math.max(.1,Math.min(50,this.ppf*zf));this.so=mf*this.ppf-pos.x;this.so=Math.max(0,this.so);}
+      else{this.so+=e.deltaY;this.so=Math.max(0,this.so);}
+      this._draw();
+    },{passive:false});
+  }
+  _pos(e){const r=this.cv.getBoundingClientRect();return{x:e.clientX-r.left,y:e.clientY-r.top};}
+  _frame(e){return Math.max(0,Math.min(Math.round((this._pos(e).x+this.so)/this.ppf),this.total-1));}
+}
+
+// ==================== App ====================
+window.addEventListener('error', e => console.error('GLOBAL ERROR:', e.message, e.filename, e.lineno));
+console.log('[App] Script starting...');
+
+const $ = s => document.querySelector(s);
+const dom = {
+  btnImport:$('#btn-import'), btnExport:$('#btn-export'), btnExportFull:$('#btn-export-full'),
+  btnResetCam:$('#btn-reset-cam'), chkGround:$('#chk-ground'), chkTrail:$('#chk-trail'),
+  selSpeed:$('#sel-speed'), infoFrame:$('#info-frame'), infoTime:$('#info-time'), infoDur:$('#info-dur'),
+  viewport:$('#viewport'), dropOverlay:$('#drop-overlay'), loading:$('#loading'),
+  jointTree:$('#joint-tree'), motionInfo:$('#motion-info'), tlCanvas:$('#tl-canvas'),
+  btnStart:$('#btn-start'), btnPrev:$('#btn-prev'), btnPlay:$('#btn-play'), btnNext:$('#btn-next'), btnEnd:$('#btn-end'),
+  btnLoop:$('#btn-loop'), btnIn:$('#btn-in'), btnOut:$('#btn-out'), btnClearTrim:$('#btn-clear-trim'),
+  trimText:$('#trim-text'), statusText:$('#status-text'), fileInput:$('#file-input'),
+};
+
+let bvhData=null, cf=0, playing=false, loopMode=false, ip=0, op=0, aid=null, lt=0;
+console.log('[App] DOM ready, viewport:', dom.viewport, 'tlCanvas:', dom.tlCanvas);
+const viewer = new SkeletonViewer(dom.viewport);
+console.log('[App] SkeletonViewer created');
+const timeline = new Timeline(dom.tlCanvas);
+console.log('[App] Timeline created');
+
+viewer.onFrameChange = f => { cf=f; timeline.setCurrentFrame(f); _updateInfo(); };
+timeline.onSeek = f => { cf=f; viewer.seekTo(f); _updateInfo(); };
+timeline.onTrim = (a,b) => { ip=a; op=b; _updateTrim(); };
+
+function _updateInfo() {
+  if(!bvhData){dom.infoFrame.textContent='帧: -/-';dom.infoTime.textContent='时间: -';dom.infoDur.textContent='总长: -';return;}
+  const t=cf*bvhData.motion.frameTime, m=Math.floor(t/60), s=(t%60).toFixed(2);
+  dom.infoFrame.textContent=`帧: ${cf}/${bvhData.motion.frames}`;
+  dom.infoTime.textContent=`时间: ${m}:${s.padStart(5,'0')}`;
+  const dm=Math.floor(bvhData.duration/60), ds=(bvhData.duration%60).toFixed(2);
+  dom.infoDur.textContent=`总长: ${dm}:${ds.padStart(5,'0')}`;
+}
+function _updateTrim() {
+  if(!bvhData){dom.trimText.textContent='';return;}
+  const t=bvhData.motion.frames;
+  if(ip<=0&&op>=t)dom.trimText.textContent='全部帧';
+  else dom.trimText.textContent=`裁剪: [${ip} → ${op}] ${op-ip}帧`;
+}
+
+async function loadFile(file) {
+  dom.loading.classList.remove('hidden'); _status('加载中...');
+  try {
+    const text = await new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result);r.onerror=()=>rej(new Error('读取失败'));r.readAsText(file);});
+    bvhData = parseBVH(text);
+    ip=0; op=bvhData.motion.frames;
+    _status('计算波形...');
+    const intensity = await new Promise(res=>setTimeout(()=>res(computeMotionIntensity(bvhData)),30));
+    viewer.loadBVH(bvhData); viewer.seekTo(0);
+    timeline.setData(bvhData.motion.frames,bvhData.motion.frameTime,intensity);
+    timeline.setTrimRange(ip,op);
+    cf=0; _updateInfo(); _updateJointTree(); _updateMotionInfo(); _updateTrim();
+    _enable(true);
+    const chk = viewer.lastSelfCheck;
+    if (chk && !chk.ok) {
+      _status('⚠️ 骨骼自检异常 — 请按 Ctrl+Shift+R 强制刷新（当前很可能是旧缓存页面）');
+    } else {
+      _status(`已加载: ${file.name||'unknown'} (${bvhData.motion.frames}帧, ${bvhData.jointNames.length}关节) · ${APP_VERSION} 自检通过`);
+    }
+  } catch(e) {
+    console.error(e); _status('❌ '+e.message); _toast('解析失败: '+e.message);
+  } finally { dom.loading.classList.add('hidden'); }
+}
+
+function _updateJointTree() {
+  if(!bvhData)return;
+  const {jointNames,jointParents,jointIsEndSite}=bvhData;
+  const d=new Array(jointNames.length).fill(0);
+  for(let i=1;i<jointNames.length;i++)d[i]=d[jointParents[i]]+1;
+  let h='';
+  for(let i=0;i<jointNames.length;i++){
+    const indent='  '.repeat(d[i]),isR=jointParents[i]<0,isE=jointIsEndSite[i];
+    let icon='🦴',cls='joint';if(isR){icon='⭐';cls='root';}if(isE){icon='•';cls='end';}
+    h+=`<div class="joint-node ${cls}" data-j="${i}" title="${jointNames[i]}"><span class="indent">${indent}</span>${icon} ${jointNames[i]}</div>`;
+  }
+  dom.jointTree.innerHTML=h;
+}
+function _updateMotionInfo() {
+  if(!bvhData)return;
+  const fps=(1/bvhData.motion.frameTime).toFixed(1), dm=Math.floor(bvhData.duration/60), ds=(bvhData.duration%60).toFixed(2);
+  dom.motionInfo.innerHTML=`<div class="info-row"><span class="info-label">帧数</span><span class="info-value">${bvhData.motion.frames}</span></div><div class="info-row"><span class="info-label">帧率</span><span class="info-value">${fps} fps</span></div><div class="info-row"><span class="info-label">时长</span><span class="info-value">${dm}:${ds.padStart(5,'0')}</span></div><div class="info-row"><span class="info-label">关节数</span><span class="info-value">${bvhData.jointNames.length}</span></div><div class="info-row"><span class="info-label">通道数</span><span class="info-value">${bvhData.totalChannels}</span></div>`;
+}
+function _enable(v){[dom.btnExport,dom.btnExportFull,dom.btnResetCam,dom.btnStart,dom.btnPrev,dom.btnPlay,dom.btnNext,dom.btnEnd,dom.btnIn,dom.btnOut,dom.btnClearTrim].forEach(b=>b.disabled=!v);}
+function _status(m){dom.statusText.textContent=m;console.log('[BVH]',m);}
+function _toast(m,d=2500){let t=document.getElementById('toast');if(!t){t=document.createElement('div');t.id='toast';document.body.appendChild(t);}t.textContent=m;t.classList.add('show');clearTimeout(t._tid);t._tid=setTimeout(()=>t.classList.remove('show'),d);}
+
+function _play(){if(!bvhData||playing)return;playing=true;viewer.play();dom.btnPlay.textContent='⏸';dom.btnPlay.classList.add('active');lt=performance.now();_status('▶ 播放中...');}
+function _pause(){playing=false;viewer.pause();dom.btnPlay.textContent='▶';dom.btnPlay.classList.remove('active');_status('⏸ 已暂停');}
+function togglePlay(){if(!bvhData)return;if(playing)_pause();else _play();}
+
+function _loop(timestamp) {
+  aid=requestAnimationFrame(_loop);
+  const dt=Math.min((timestamp-lt)/1000,.1); lt=timestamp;
+  if(playing&&bvhData) {
+    viewer.animate(dt);
+    if(viewer.currentFrame!==cf){cf=viewer.currentFrame;timeline.setCurrentFrame(cf);_updateInfo();
+      const tf=bvhData.motion.frames;
+      if(op<tf&&cf>=op){if(loopMode){viewer.seekTo(ip);cf=ip;timeline.setCurrentFrame(cf);}else _pause();}
+      if(cf>=tf-1){if(loopMode){viewer.seekTo(ip);cf=ip;timeline.setCurrentFrame(cf);}else _pause();}
+    }
+  }
+  viewer.render();
+}
+
+function _step(d){if(!bvhData)return;cf=Math.max(0,Math.min(cf+d,bvhData.motion.frames-1));viewer.seekTo(cf);timeline.setCurrentFrame(cf);_updateInfo();}
+function _skipStart(){if(!bvhData)return;cf=ip;viewer.seekTo(cf);timeline.setCurrentFrame(cf);_updateInfo();}
+function _skipEnd(){if(!bvhData)return;cf=Math.max(0,op-1);viewer.seekTo(cf);timeline.setCurrentFrame(cf);_updateInfo();}
+
+function _exportTrimmed() {
+  if(!bvhData)return; const ao=Math.min(op,bvhData.motion.frames);
+  _download(exportBVH(bvhData,ip,ao-1),'exported_cut.bvh'); _toast(`已导出 ${ao-ip} 帧`);
+}
+function _exportFull() {
+  if(!bvhData)return; _download(exportBVH(bvhData,0,bvhData.motion.frames-1),'exported_full.bvh'); _toast(`已导出全部帧`);
+}
+function _download(content,fn){const b=new Blob([content],{type:'application/octet-stream'}),url=URL.createObjectURL(b);const a=document.createElement('a');a.href=url;a.download=fn;a.click();URL.revokeObjectURL(url);}
+
+// Events
+dom.btnImport.addEventListener('click',()=>dom.fileInput.click());
+dom.fileInput.addEventListener('change',e=>{if(e.target.files[0])loadFile(e.target.files[0]);});
+dom.viewport.addEventListener('dragover',e=>{e.preventDefault();dom.dropOverlay.classList.remove('hidden');});
+dom.viewport.addEventListener('dragleave',e=>{if(!dom.viewport.contains(e.relatedTarget))dom.dropOverlay.classList.add('hidden');});
+dom.viewport.addEventListener('drop',e=>{e.preventDefault();dom.dropOverlay.classList.add('hidden');const f=e.dataTransfer.files[0];if(f&&f.name.endsWith('.bvh'))loadFile(f);});
+document.addEventListener('dragover',e=>{e.preventDefault();dom.dropOverlay.classList.remove('hidden');});
+document.addEventListener('drop',e=>{e.preventDefault();dom.dropOverlay.classList.add('hidden');const f=e.dataTransfer.files[0];if(f&&f.name.endsWith('.bvh')&&!dom.viewport.contains(e.target))loadFile(f);});
+dom.btnExport.addEventListener('click',_exportTrimmed);
+dom.btnExportFull.addEventListener('click',_exportFull);
+dom.btnResetCam.addEventListener('click',()=>viewer.resetCamera());
+dom.chkGround.addEventListener('change',()=>viewer.setShowGround(dom.chkGround.checked));
+dom.chkTrail.addEventListener('change',()=>viewer.setShowTrail(dom.chkTrail.checked));
+dom.selSpeed.addEventListener('change',()=>viewer.setSpeed(parseFloat(dom.selSpeed.value)));
+dom.btnPlay.addEventListener('click',togglePlay);
+dom.btnPrev.addEventListener('click',()=>_step(-1));
+dom.btnNext.addEventListener('click',()=>_step(1));
+dom.btnStart.addEventListener('click',_skipStart);
+dom.btnEnd.addEventListener('click',_skipEnd);
+dom.btnLoop.addEventListener('click',()=>{loopMode=!loopMode;viewer.setLoop(loopMode);dom.btnLoop.classList.toggle('active',loopMode);_status(loopMode?'🔁 循环:开':'🔁 循环:关');});
+dom.btnIn.addEventListener('click',()=>{if(!bvhData)return;ip=cf;if(ip>=op)op=Math.min(ip+1,bvhData.motion.frames);timeline.setTrimRange(ip,op);_updateTrim();_toast('入点: 帧 '+ip);});
+dom.btnOut.addEventListener('click',()=>{if(!bvhData)return;op=cf;if(op<=ip)ip=Math.max(0,op-1);timeline.setTrimRange(ip,op);_updateTrim();_toast('出点: 帧 '+op);});
+dom.btnClearTrim.addEventListener('click',()=>{if(!bvhData)return;ip=0;op=bvhData.motion.frames;timeline.clearTrim();_updateTrim();_toast('裁剪已清除');});
+document.addEventListener('keydown',e=>{
+  if(e.target.tagName==='INPUT'||e.target.tagName==='SELECT'||e.target.tagName==='TEXTAREA')return;
+  switch(e.code){case'Space':e.preventDefault();togglePlay();break;case'ArrowLeft':e.preventDefault();_step(e.shiftKey?-10:-1);break;case'ArrowRight':e.preventDefault();_step(e.shiftKey?10:1);break;case'KeyI':e.preventDefault();dom.btnIn.click();break;case'KeyO':e.preventDefault();dom.btnOut.click();break;case'Home':e.preventDefault();_skipStart();break;case'End':e.preventDefault();_skipEnd();break;case'KeyL':if(!e.ctrlKey&&!e.metaKey){e.preventDefault();dom.btnLoop.click();}break;case'KeyF':if(!e.ctrlKey&&!e.metaKey){e.preventDefault();viewer.resetCamera();}break;case'Escape':if(playing)_pause();break;}
+});
+window.addEventListener('resize',()=>{viewer._resize();timeline.resize();});
+
+// Init
+console.log('[App] Creating viewer...');
+(function(){ try { document.title = 'BVH 动画剪辑工具 ' + APP_VERSION; } catch(e) {} })();
+try {
+  viewer._resize(); timeline.resize(); lt=performance.now(); aid=requestAnimationFrame(_loop);
+  console.log('[App] Render loop started');
+} catch(e) { console.error('[App] Init error:', e); }
+_status('拖放 BVH 文件到窗口或点击"导入"按钮');
+_toast('🎬 拖放 BVH 文件开始编辑',3000);
+console.log('BVH Clip tool ready. Viewer:', viewer, 'Timeline:', timeline);
+</script>
+</body>
+</html>
